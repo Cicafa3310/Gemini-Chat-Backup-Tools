@@ -8,9 +8,9 @@ A small set of scripts to export and archive your Google Gemini conversation his
 
 | File | Where to run | Purpose |
 |---|---|---|
-| `gemini_live_export.js` | Individual chat page | Exports a single live Gemini chat |
-| `gemini_chat_export.js` | myactivity.google.com | Exports chat history from Google Activity |
-| `split_for_notebooklm.py` | Terminal | Splits large exports into NotebookLM-sized chunks |
+| [`gemini_live_export.js`](#-gemini_live_exportjs--live-chat-exporter) | Individual chat page | Exports a single live Gemini chat |
+| [`gemini_chat_export.js`](#-gemini_chat_exportjs--activity-history-exporter) | myactivity.google.com | Exports chat history from Google Activity |
+| [`split_for_notebooklm.py`](#-split_for_notebooklmpy--history-splitter) | Terminal | Splits large exports into NotebookLM-sized chunks |
 
 ---
 
@@ -154,6 +154,28 @@ Exports chat history from your Google Activity page.
 3. Paste the script below and press **Enter**
 4. Watch the console — it scrolls automatically, then opens each dialog and extracts the answer
 
+### Output format
+
+```
+EXPORT:   Google Gemini Activity
+URL:      https://myactivity.google.com/product/gemini
+Exported: 11/03/2026, 14:32:00
+Dialogs:  3366
+
+========== 9 MARCH 2026 ==========
+
+[19:15] USER: Your message here...
+ANSWER:
+Gemini's response here...
+------------------------------------------
+
+========== 8 MARCH 2026 ==========
+
+[14:03] USER: Another message...
+ANSWER:
+...
+```
+
 ### Script
 
 ```javascript
@@ -283,28 +305,6 @@ Exports chat history from your Google Activity page.
   console.log(`✅ Done! File saved as: ${filename}`);
   console.log(`   Dialogs: ${results.length} | Characters: ${output.length}`);
 })();
-```
-
-### Output format
-
-```
-EXPORT:   Google Gemini Activity
-URL:      https://myactivity.google.com/product/gemini
-Exported: 11/03/2026, 14:32:00
-Dialogs:  3366
-
-========== 9 MARCH 2026 ==========
-
-[19:15] USER: Your message here...
-ANSWER:
-Gemini's response here...
-------------------------------------------
-
-========== 8 MARCH 2026 ==========
-
-[14:03] USER: Another message...
-ANSWER:
-...
 ```
 
 ### Notes
