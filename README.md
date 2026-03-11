@@ -16,14 +16,16 @@ A small set of scripts to export and archive your Google Gemini conversation his
 
 ## 🟡 `gemini_live_export.js` — Live Chat Exporter
 
-Exports the full conversation from any open Gemini chat page directly to your Downloads folder. Scrolls up automatically to load the entire history before extracting.
+Exports the full conversation from any open Gemini chat page directly to your Downloads folder. **Scrolls automatically** to load the entire history before extracting — no manual scrolling needed.
+
+> **Heads up:** Loading takes ~3–4 seconds per scroll pass. For long chats (100+ messages) expect 1–2 minutes before the file downloads.
 
 ### How to use
 
 1. Open a Gemini chat: `https://gemini.google.com/app/XXXXXXXXXXXXXX`
 2. Open DevTools — **F12** → **Console** tab
 3. Paste the script below and press **Enter**
-4. Wait — the script will scroll up to load all messages, then download a `.txt` file
+4. Watch the console — it will log progress while scrolling, then download the file automatically
 
 ### Script
 
@@ -33,6 +35,7 @@ Exports the full conversation from any open Gemini chat page directly to your Do
                       "July","August","September","October","November","December"];
 
   console.log("📜 Step 1/2 — Loading all messages...");
+  console.log("   ⏳ This may take 1–2 min for long chats. Watch the block count below.");
 
   const scroller = document.querySelector("infinite-scroller.chat-history");
   if (!scroller) { console.error("❌ Container not found!"); return; }
@@ -133,7 +136,7 @@ ANSWER:
 ### Notes
 
 - Works on `gemini.google.com/app/...` pages only
-- Stops scrolling after 8 passes with no new content
+- Stops scrolling after 8 consecutive passes with no new content
 - Output filename: `gemini_chat_<chatId>_<date>.txt`
 
 ---
@@ -142,81 +145,122 @@ ANSWER:
 
 Exports chat history from your Google Activity page.
 
-> **Note:** This script only captures what's currently loaded on screen. Before running it, **scroll down manually to the bottom of the page** to load all entries — otherwise older history will be missing.
+> **Heads up:** The script scrolls down automatically to load all cards first. With ~2.6 seconds per dialog, expect **1–2 min for 100 dialogs, ~1.5 hours for 3000+**. Remaining time is shown in the console after each dialog.
 
 ### How to use
 
 1. Open `https://myactivity.google.com/product/gemini`
-2. **Scroll to the bottom of the page** to load all history
-3. Open DevTools — **F12** → **Console** tab
-4. Paste the script below and press **Enter**
+2. Open DevTools — **F12** → **Console** tab
+3. Paste the script below and press **Enter**
+4. Watch the console — it scrolls automatically, then opens each dialog and extracts the answer
 
 ### Script
 
 ```javascript
 (async () => {
-  window.scrollTo(0, 0);
-  await new Promise(r => setTimeout(r, 1500));
-
   const monthNames = ["January","February","March","April","May","June",
                       "July","August","September","October","November","December"];
 
+  // ── Step 1/2: Scroll DOWN to load all cards ────────────────
+  console.log("📜 Step 1/2 — Loading all activity cards...");
+
+  let prev = 0, same = 0, totalScrolls = 0;
+
+  while (same < 8) {
+    window.scrollTo(0, document.body.scrollHeight);
+    await new Promise(r => setTimeout(r, 2000));
+    window.scrollBy(0, -300);
+    await new Promise(r => setTimeout(r, 300));
+    window.scrollTo(0, document.body.scrollHeight);
+    await new Promise(r => setTimeout(r, 1000));
+
+    let curr = document.querySelectorAll('[jsname="MFYZYe"]').length;
+    totalScrolls++;
+    if (curr === prev) { same++; console.log(`   Cards: ${curr} — no change (${same}/8)`); }
+    else { same = 0; prev = curr; console.log(`   Cards: ${curr} — loading...`); }
+  }
+
+  console.log(`✅ All cards loaded: ${prev} total (${totalScrolls} scrolls)`);
+
+  // ── Step 2/2: Extract conversations ───────────────────────
+  console.log("💬 Step 2/2 — Extracting conversations...");
+
+  const links = Array.from(document.querySelectorAll('a.WFTFcf'));
+  const totalLinks = links.length;
+  const secPerItem = 2.6; // ~2s open + 0.6s close
+  const estSec = Math.round(totalLinks * secPerItem);
+  const estMin = Math.floor(estSec / 60);
+  const estRemSec = estSec % 60;
+  console.log(`   Found ${totalLinks} dialogs`);
+  console.log(`   ⏱ Estimated time: ~${estMin > 0 ? estMin + " min " : ""}${estRemSec} sec`);
+
   const now = new Date();
-  const dateHeader = `${now.getDate()} ${monthNames[now.getMonth()]} ${now.getFullYear()}`;
+  let results = [];
+  let lastDate = null;
 
-  const results = [];
-  const title = document.title?.replace(" - Gemini", "").trim() || "Gemini Chat";
+  function parseDate(raw) {
+    if (!raw || raw.length !== 8) return null;
+    const y = raw.slice(0, 4), m = parseInt(raw.slice(4, 6)), d = parseInt(raw.slice(6, 8));
+    return `${d} ${monthNames[m - 1]} ${y}`;
+  }
 
-  results.push(`EXPORT: ${title}`);
-  results.push(`URL: ${location.href}`);
-  results.push("");
-  results.push(`\n========== ${dateHeader.toUpperCase()} ==========\n`);
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    const card = link.closest('[jsname="MFYZYe"]');
+    const cwiz = link.closest('[data-date]');
+    const dateLabel = parseDate(cwiz?.getAttribute('data-date'));
 
-  const allBlocks = document.querySelectorAll("user-query, model-response");
-  console.log(`Found blocks: ${allBlocks.length}`);
-
-  let msgIndex = 0;
-
-  allBlocks.forEach((block) => {
-    const tag = block.tagName.toLowerCase();
-
-    if (tag === "user-query") {
-      const queryDiv = block.querySelector(".query-text");
-      if (!queryDiv) return;
-      const lines = Array.from(queryDiv.querySelectorAll("p.query-text-line"))
-        .map(p => p.innerText.trim())
-        .filter(t => t.length > 0 && t !== "Ваш запрос");
-      const text = lines.join("\n").trim();
-      if (!text) return;
-      msgIndex++;
-      results.push(`[${msgIndex}] USER: ${text}`);
-      results.push("------------------------------------------");
-
-    } else if (tag === "model-response") {
-      const markdown = block.querySelector(".markdown");
-      if (!markdown) return;
-      const text = markdown.innerText.replace(/^Ответ Gemini\s*/i, "").trim();
-      if (!text) return;
-      results.push(`ANSWER:\n${text}`);
-      results.push("==========================================");
-      results.push("");
+    if (dateLabel && dateLabel !== lastDate) {
+      results.push(`\n========== ${dateLabel.toUpperCase()} ==========\n`);
+      lastDate = dateLabel;
     }
-  });
 
-  const output = results.join("\n");
-  const chatId = location.pathname.split("/").pop() || "chat";
-  const filename = `gemini_chat_${chatId}_${now.toISOString().slice(0,10)}.txt`;
+    const queryText = card?.querySelector('[jsname="r4nke"]')?.innerText
+      .replace(/^Отправлен запрос\s*/i, '').trim() || '?';
+    const timeText = card?.querySelector('.H3Q9vf')?.innerText.split('•')[0].trim() || '??:??';
 
-  const blob = new Blob([output], { type: "text/plain;charset=utf-8" });
-  const a = document.createElement("a");
+    const remaining = totalLinks - i - 1;
+    const remSec = Math.round(remaining * secPerItem);
+    const remMin = Math.floor(remSec / 60);
+    const remSecDisplay = remSec % 60;
+    console.log(`   [${i + 1}/${totalLinks}] ${queryText.slice(0, 50)} — ~${remMin > 0 ? remMin + "m " : ""}${remSecDisplay}s left`);
+
+    link.click();
+    await new Promise(r => setTimeout(r, 2000));
+
+    let answerText = '[not loaded]';
+    const modal = document.querySelector('.Wi5i2');
+
+    if (modal) {
+      const content = modal.querySelector('.PbnGhe');
+      if (content) {
+        const lines = content.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+        const startIdx = lines.findIndex(l => l.startsWith('Отправлен запрос'));
+        answerText = startIdx >= 0 ? lines.slice(startIdx).join('\n') : lines.join('\n');
+      }
+      const closeBtn = modal.querySelector('button[aria-label*="закр"], button[aria-label*="Закр"]')
+        || modal.querySelector('button');
+      if (closeBtn) closeBtn.click();
+      await new Promise(r => setTimeout(r, 600));
+    }
+
+    results.push(`[${timeText}] USER: ${queryText}\nANSWER:\n${answerText}\n------------------------------------------`);
+  }
+
+  const day   = String(now.getDate()).padStart(2, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year  = now.getFullYear();
+  const filename = `gemini_history_${day}_${month}_${year}.txt`;
+
+  const output = results.join('\n');
+  const blob = new Blob([output], { type: 'text/plain' });
+  const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = filename;
-  document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
 
-  console.log(`✅ Done! ${filename}`);
-  console.log(`   Blocks: ${allBlocks.length} | Messages: ${msgIndex} | Chars: ${output.length}`);
+  console.log(`✅ Done! File saved as: ${filename}`);
+  console.log(`   Dialogs: ${results.length} | Characters: ${output.length}`);
 })();
 ```
 
@@ -229,7 +273,7 @@ NotebookLM has a **~500k character limit per source**. This script splits a larg
 ### How to use
 
 ```bash
-python split_for_notebooklm.py gemini_history_09_03_2026.txt
+python split_for_notebooklm.py gemini_history_[your_name].txt
 ```
 
 ### Script
