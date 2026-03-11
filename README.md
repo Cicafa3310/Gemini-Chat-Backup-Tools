@@ -145,7 +145,7 @@ ANSWER:
 
 Exports chat history from your Google Activity page.
 
-> **Heads up:** The script scrolls down automatically to load all cards first. With ~2.6 seconds per dialog, expect **1–2 min for 100 dialogs, ~1.5 hours for 3000+**. Remaining time is shown in the console after each dialog.
+> **Heads up:** The script scrolls down automatically to load all cards first. Speed depends on your connection — it polls for each modal instead of waiting a fixed delay. Expect roughly **~5 min for 300 dialogs, ~35 min for 3000+**. Remaining time is shown in the console after each dialog.
 
 ### How to use
 
@@ -153,6 +153,28 @@ Exports chat history from your Google Activity page.
 2. Open DevTools — **F12** → **Console** tab
 3. Paste the script below and press **Enter**
 4. Watch the console — it scrolls automatically, then opens each dialog and extracts the answer
+
+### Output format
+
+```
+EXPORT:   Google Gemini Activity
+URL:      https://myactivity.google.com/product/gemini
+Exported: 11/03/2026, 14:32:00
+Dialogs:  3366
+
+========== 9 MARCH 2026 ==========
+
+[19:15] USER: Your message here...
+ANSWER:
+Gemini's response here...
+------------------------------------------
+
+========== 8 MARCH 2026 ==========
+
+[14:03] USER: Another message...
+ANSWER:
+...
+```
 
 ### Script
 
@@ -165,6 +187,7 @@ Exports chat history from your Google Activity page.
   console.log("📜 Step 1/2 — Loading all activity cards...");
 
   let prev = 0, same = 0, totalScrolls = 0;
+  const scrollStart = Date.now();
 
   while (same < 8) {
     window.scrollTo(0, document.body.scrollHeight);
@@ -175,9 +198,10 @@ Exports chat history from your Google Activity page.
     await new Promise(r => setTimeout(r, 1000));
 
     let curr = document.querySelectorAll('[jsname="MFYZYe"]').length;
+    const elapsed = Math.round((Date.now() - scrollStart) / 1000);
     totalScrolls++;
-    if (curr === prev) { same++; console.log(`   Cards: ${curr} — no change (${same}/8)`); }
-    else { same = 0; prev = curr; console.log(`   Cards: ${curr} — loading...`); }
+    if (curr === prev) { same++; console.log(`   Cards: ${curr} — no change (${same}/8) | ${elapsed}s elapsed`); }
+    else { same = 0; prev = curr; console.log(`   Cards: ${curr} — loading... | ${elapsed}s elapsed`); }
   }
 
   console.log(`✅ All cards loaded: ${prev} total (${totalScrolls} scrolls)`);
@@ -185,18 +209,29 @@ Exports chat history from your Google Activity page.
   // ── Step 2/2: Extract conversations ───────────────────────
   console.log("💬 Step 2/2 — Extracting conversations...");
 
-  const links = Array.from(document.querySelectorAll('a.WFTFcf'));
+  // ── Settings ────────────────────────────────────────────────
+  const WAIT_MS = 100; // ms per poll tick — increase to 200-300 on slow connection
+  const allLinks = Array.from(document.querySelectorAll('a.WFTFcf'));
+  const answer = prompt(`Found ${allLinks.length} dialogs.\nHow many to export? (leave empty or cancel = all)`);
+  const LIMIT = answer && answer.trim() !== "" ? parseInt(answer) : null;
+  const links = LIMIT ? allLinks.slice(0, LIMIT) : allLinks;
   const totalLinks = links.length;
-  const secPerItem = 2.6; // ~2s open + 0.6s close
+  const secPerItem = 1.0; // avg after optimization (polls for modal, no fixed 2s wait)
   const estSec = Math.round(totalLinks * secPerItem);
   const estMin = Math.floor(estSec / 60);
   const estRemSec = estSec % 60;
-  console.log(`   Found ${totalLinks} dialogs`);
+  console.log(`   Found ${allLinks.length} dialogs total, exporting ${totalLinks}`);
   console.log(`   ⏱ Estimated time: ~${estMin > 0 ? estMin + " min " : ""}${estRemSec} sec`);
 
   const now = new Date();
   let results = [];
   let lastDate = null;
+
+  results.push(`EXPORT: Google Gemini Activity`);
+  results.push(`URL: ${location.href}`);
+  results.push(`Exported: ${now.toLocaleString("en-GB")}`);
+  results.push(`Dialogs: ${totalLinks}${LIMIT ? ` (limited from ${allLinks.length})` : ""}`);
+  results.push("");
 
   function parseDate(raw) {
     if (!raw || raw.length !== 8) return null;
@@ -216,8 +251,8 @@ Exports chat history from your Google Activity page.
     }
 
     const queryText = card?.querySelector('[jsname="r4nke"]')?.innerText
-      .replace(/^Отправлен запрос\s*/i, '').trim() || '?';
-    const timeText = card?.querySelector('.H3Q9vf')?.innerText.split('•')[0].trim() || '??:??';
+      .replace(/^Отправлен запрос\s*/i, '').replace(/^Sent to\s*/i, '').trim() || '?';
+    let timeText = card?.querySelector('.H3Q9vf')?.innerText.split('•')[0].trim() || '';
 
     const remaining = totalLinks - i - 1;
     const remSec = Math.round(remaining * secPerItem);
@@ -226,22 +261,30 @@ Exports chat history from your Google Activity page.
     console.log(`   [${i + 1}/${totalLinks}] ${queryText.slice(0, 50)} — ~${remMin > 0 ? remMin + "m " : ""}${remSecDisplay}s left`);
 
     link.click();
-    await new Promise(r => setTimeout(r, 2000));
+
+    // Wait for modal to appear (up to 3s), check every WAIT_MS
+    let modal = null;
+    for (let t = 0; t < 30; t++) {
+      await new Promise(r => setTimeout(r, WAIT_MS));
+      modal = document.querySelector('.Wi5i2');
+      if (modal) break;
+    }
 
     let answerText = '[not loaded]';
-    const modal = document.querySelector('.Wi5i2');
 
     if (modal) {
-      const content = modal.querySelector('.PbnGhe');
-      if (content) {
-        const lines = content.innerText.split('\n').map(l => l.trim()).filter(Boolean);
-        const startIdx = lines.findIndex(l => l.startsWith('Отправлен запрос'));
-        answerText = startIdx >= 0 ? lines.slice(startIdx).join('\n') : lines.join('\n');
+      const answerDiv = modal.querySelector('[jsname="buaNG"]');
+      if (answerDiv) {
+        answerText = answerDiv.innerText.trim();
       }
-      const closeBtn = modal.querySelector('button[aria-label*="закр"], button[aria-label*="Закр"]')
-        || modal.querySelector('button');
+      if (!timeText) {
+        timeText = modal.querySelector('.jiqmSb')?.innerText.trim() || '??:??';
+      }
+      const closeBtn = Array.from(modal.querySelectorAll('button i'))
+        .find(i => i.textContent.trim() === 'close')
+        ?.closest('button');
       if (closeBtn) closeBtn.click();
-      await new Promise(r => setTimeout(r, 600));
+      await new Promise(r => setTimeout(r, WAIT_MS * 3));
     }
 
     results.push(`[${timeText}] USER: ${queryText}\nANSWER:\n${answerText}\n------------------------------------------`);
@@ -263,6 +306,14 @@ Exports chat history from your Google Activity page.
   console.log(`   Dialogs: ${results.length} | Characters: ${output.length}`);
 })();
 ```
+
+### Notes
+
+- Works on `myactivity.google.com/product/gemini` only
+- Scrolls down automatically to load all cards before extracting
+- Before extracting, a dialog will ask how many dialogs to export — enter a number or leave empty for all
+- On slow connections, increase `WAIT_MS` from `100` to `200`–`300` to avoid `[not loaded]` results
+- Output filename: `gemini_history_DD_MM_YYYY.txt`
 
 ---
 
@@ -355,7 +406,7 @@ if __name__ == "__main__":
 - Creates a dedicated folder next to your file:
 
 ```
-gemini_history_09_03_2026_parts/
+gemini_history_DD_MM_YYYY_parts/
     part01_of29.txt
     part02_of29.txt
     ...
