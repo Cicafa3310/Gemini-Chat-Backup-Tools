@@ -152,7 +152,7 @@ Exports chat history from your Google Activity page.
 1. Open `https://myactivity.google.com/product/gemini`
 2. Open DevTools — **F12** → **Console** tab
 3. Paste the script below and press **Enter**
-4. Watch the console — it scrolls automatically, then opens each dialog and extracts the answer
+4. Answer the setup prompts, then watch the console
 
 ### Script
 
@@ -161,11 +161,42 @@ Exports chat history from your Google Activity page.
   const monthNames = ["January","February","March","April","May","June",
                       "July","August","September","October","November","December"];
 
-  // ── Step 1/2: Scroll DOWN to load all cards ────────────────
-  console.log("📜 Step 1/2 — Loading all activity cards...");
+  // ── Setup prompts (shown before anything starts) ───────────
+  const scrollAns = prompt("📜 Setup 1/3 — Scroll limit\nHow many cards to load max?\n(leave empty = scroll to the very end)");
+  const SCROLL_LIMIT = scrollAns && scrollAns.trim() !== "" ? parseInt(scrollAns) : null;
+
+  const dateAns = prompt("📅 Setup 2/3 — Date filter\nExport only from this date onwards?\nFormat: DD.MM.YYYY  (e.g. 01.01.2025)\n(leave empty = export everything)");
+  let fromDate = null;
+  if (dateAns && dateAns.trim() !== "") {
+    const p = dateAns.trim().split(".");
+    if (p.length === 3) fromDate = new Date(parseInt(p[2]), parseInt(p[1]) - 1, parseInt(p[0]));
+  }
+
+  const exportAns = prompt("📦 Setup 3/3 — Export limit\nHow many dialogs to export?\n(leave empty = all loaded cards)");
+  const EXPORT_LIMIT = exportAns && exportAns.trim() !== "" ? parseInt(exportAns) : null;
+
+  const WAIT_MS = 100; // ms per poll tick — increase to 200-300 on slow connection
+
+  // ── Step 1/2: Scroll DOWN to load cards ───────────────────
+  console.log("📜 Step 1/2 — Loading activity cards...");
+  if (SCROLL_LIMIT) console.log(`   ⏹ Will stop after ${SCROLL_LIMIT} cards`);
+  if (fromDate)     console.log(`   📅 Date filter: from ${fromDate.toLocaleDateString("en-GB")}`);
 
   let prev = 0, same = 0, totalScrolls = 0;
   const scrollStart = Date.now();
+  let dateStopReached = false;
+  let lastDateCheck = 0;
+
+  // Helper: check date of last loaded card without opening anything
+  function checkLastCardDate() {
+    const allCards = document.querySelectorAll('[jsname="MFYZYe"]');
+    if (!allCards.length) return null;
+    const lastCard = allCards[allCards.length - 1];
+    const cwiz = lastCard.closest('[data-date]') || lastCard.querySelector('[data-date]');
+    const raw = cwiz?.getAttribute('data-date');
+    if (!raw || raw.length !== 8) return null;
+    return new Date(parseInt(raw.slice(0,4)), parseInt(raw.slice(4,6))-1, parseInt(raw.slice(6,8)));
+  }
 
   while (same < 8) {
     window.scrollTo(0, document.body.scrollHeight);
@@ -178,8 +209,31 @@ Exports chat history from your Google Activity page.
     let curr = document.querySelectorAll('[jsname="MFYZYe"]').length;
     const elapsed = Math.round((Date.now() - scrollStart) / 1000);
     totalScrolls++;
-    if (curr === prev) { same++; console.log(`   Cards: ${curr} — no change (${same}/8) | ${elapsed}s elapsed`); }
-    else { same = 0; prev = curr; console.log(`   Cards: ${curr} — loading... | ${elapsed}s elapsed`); }
+    if (curr === prev) {
+      same++;
+      console.log(`   Cards: ${curr} — no change (${same}/8) | ${elapsed}s elapsed`);
+    } else {
+      same = 0; prev = curr;
+      console.log(`   Cards: ${curr} — loading... | ${elapsed}s elapsed`);
+    }
+    if (SCROLL_LIMIT && curr >= SCROLL_LIMIT) {
+      console.log(`   ⏹ Scroll limit reached: ${curr} cards`);
+      break;
+    }
+    // ── Date check every 100 cards ──────────────────────────
+    if (fromDate && curr >= lastDateCheck + 100) {
+      lastDateCheck = curr;
+      console.log(`   📅 Checking date at card ${curr}...`);
+      const cardDate = checkLastCardDate();
+      if (cardDate) {
+        console.log(`   📅 Last card date: ${cardDate.toLocaleDateString("en-GB")}`);
+        if (cardDate < fromDate) {
+          console.log(`   ✅ Passed the target date — stopping scroll early!`);
+          dateStopReached = true;
+          break;
+        }
+      }
+    }
   }
 
   console.log(`✅ All cards loaded: ${prev} total (${totalScrolls} scrolls)`);
@@ -187,18 +241,47 @@ Exports chat history from your Google Activity page.
   // ── Step 2/2: Extract conversations ───────────────────────
   console.log("💬 Step 2/2 — Extracting conversations...");
 
-  // ── Settings ────────────────────────────────────────────────
-  const WAIT_MS = 100; // ms per poll tick — increase to 200-300 on slow connection
-  const allLinks = Array.from(document.querySelectorAll('a.WFTFcf'));
-  const answer = prompt(`Found ${allLinks.length} dialogs.\nHow many to export? (leave empty or cancel = all)`);
-  const LIMIT = answer && answer.trim() !== "" ? parseInt(answer) : null;
-  const links = LIMIT ? allLinks.slice(0, LIMIT) : allLinks;
+  function parseDate(raw) {
+    if (!raw || raw.length !== 8) return null;
+    const y = raw.slice(0, 4), m = parseInt(raw.slice(4, 6)), d = parseInt(raw.slice(6, 8));
+    return `${d} ${monthNames[m - 1]} ${y}`;
+  }
+
+  function parseDateObj(raw) {
+    if (!raw || raw.length !== 8) return null;
+    return new Date(parseInt(raw.slice(0, 4)), parseInt(raw.slice(4, 6)) - 1, parseInt(raw.slice(6, 8)));
+  }
+
+  function closeAllModals() {
+    const modals = document.querySelectorAll('.Wi5i2');
+    let closed = 0;
+    for (const m of modals) {
+      const btn = Array.from(m.querySelectorAll('button i'))
+        .find(i => i.textContent.trim() === 'close')?.closest('button');
+      if (btn) { btn.click(); closed++; }
+    }
+    return closed;
+  }
+
+  let allLinks = Array.from(document.querySelectorAll('a.WFTFcf'));
+
+  // Apply date filter
+  if (fromDate) {
+    allLinks = allLinks.filter(link => {
+      const cwiz = link.closest('[data-date]');
+      const d = parseDateObj(cwiz?.getAttribute('data-date'));
+      return d && d >= fromDate;
+    });
+    console.log(`   📅 After date filter: ${allLinks.length} dialogs`);
+  }
+
+  const links = EXPORT_LIMIT ? allLinks.slice(0, EXPORT_LIMIT) : allLinks;
   const totalLinks = links.length;
-  const secPerItem = 1.0; // avg after optimization (polls for modal, no fixed 2s wait)
+  const secPerItem = 1.0;
   const estSec = Math.round(totalLinks * secPerItem);
   const estMin = Math.floor(estSec / 60);
   const estRemSec = estSec % 60;
-  console.log(`   Found ${allLinks.length} dialogs total, exporting ${totalLinks}`);
+  console.log(`   Found ${allLinks.length} dialogs, exporting ${totalLinks}`);
   console.log(`   ⏱ Estimated time: ~${estMin > 0 ? estMin + " min " : ""}${estRemSec} sec`);
 
   const now = new Date();
@@ -208,14 +291,8 @@ Exports chat history from your Google Activity page.
   results.push(`EXPORT: Google Gemini Activity`);
   results.push(`URL: ${location.href}`);
   results.push(`Exported: ${now.toLocaleString("en-GB")}`);
-  results.push(`Dialogs: ${totalLinks}${LIMIT ? ` (limited from ${allLinks.length})` : ""}`);
+  results.push(`Dialogs: ${totalLinks}${EXPORT_LIMIT ? ` (limited from ${allLinks.length})` : ""}${fromDate ? ` | From: ${fromDate.toLocaleDateString("en-GB")}` : ""}`);
   results.push("");
-
-  function parseDate(raw) {
-    if (!raw || raw.length !== 8) return null;
-    const y = raw.slice(0, 4), m = parseInt(raw.slice(4, 6)), d = parseInt(raw.slice(6, 8));
-    return `${d} ${monthNames[m - 1]} ${y}`;
-  }
 
   for (let i = 0; i < links.length; i++) {
     const link = links[i];
@@ -238,9 +315,23 @@ Exports chat history from your Google Activity page.
     const remSecDisplay = remSec % 60;
     console.log(`   [${i + 1}/${totalLinks}] ${queryText.slice(0, 50)} — ~${remMin > 0 ? remMin + "m " : ""}${remSecDisplay}s left`);
 
+    // ── Checkpoint every 20: force-close any lingering modals ─
+    if (i > 0 && i % 20 === 0) {
+      const closed = closeAllModals();
+      await new Promise(r => setTimeout(r, WAIT_MS * 5));
+      console.log(`   🔍 Checkpoint [${i}/${totalLinks}] — modals cleaned up (${closed} closed)`);
+    }
+
+    // ── Before clicking: make sure no modal is already open ───
+    const stale = document.querySelector('.Wi5i2');
+    if (stale) {
+      closeAllModals();
+      await new Promise(r => setTimeout(r, WAIT_MS * 4));
+    }
+
     link.click();
 
-    // Wait for modal to appear (up to 3s), check every WAIT_MS
+    // Wait for new modal to appear
     let modal = null;
     for (let t = 0; t < 30; t++) {
       await new Promise(r => setTimeout(r, WAIT_MS));
@@ -252,19 +343,16 @@ Exports chat history from your Google Activity page.
 
     if (modal) {
       const answerDiv = modal.querySelector('[jsname="buaNG"]');
-      if (answerDiv) {
-        answerText = answerDiv.innerText.trim();
-      }
-      if (!timeText) {
-        timeText = modal.querySelector('.jiqmSb')?.innerText.trim() || '??:??';
-      }
+      if (answerDiv) answerText = answerDiv.innerText.trim();
+      if (!timeText) timeText = modal.querySelector('.jiqmSb')?.innerText.trim() || '??:??';
+
       const closeBtn = Array.from(modal.querySelectorAll('button i'))
-        .find(i => i.textContent.trim() === 'close')
-        ?.closest('button');
+        .find(i => i.textContent.trim() === 'close')?.closest('button');
       if (closeBtn) closeBtn.click();
       await new Promise(r => setTimeout(r, WAIT_MS * 3));
     }
 
+    if (!timeText) timeText = '??:??';
     results.push(`[${timeText}] USER: ${queryText}\nANSWER:\n${answerText}\n------------------------------------------`);
   }
 
@@ -281,7 +369,7 @@ Exports chat history from your Google Activity page.
   a.click();
 
   console.log(`✅ Done! File saved as: ${filename}`);
-  console.log(`   Dialogs: ${results.length} | Characters: ${output.length}`);
+  console.log(`   Dialogs: ${totalLinks} | Characters: ${output.length}`);
 })();
 ```
 
@@ -291,7 +379,7 @@ Exports chat history from your Google Activity page.
 EXPORT:   Google Gemini Activity
 URL:      https://myactivity.google.com/product/gemini
 Exported: 11/03/2026, 14:32:00
-Dialogs:  3366
+Dialogs:  300 (limited from 3366) | From: 01.01.2025
 
 ========== 9 MARCH 2026 ==========
 
@@ -310,9 +398,10 @@ ANSWER:
 ### Notes
 
 - Works on `myactivity.google.com/product/gemini` only
-- Scrolls down automatically to load all cards before extracting
-- Before extracting, a dialog will ask how many dialogs to export — enter a number or leave empty for all
-- On slow connections, increase `WAIT_MS` from `100` to `200`–`300` to avoid `[not loaded]` results
+- Three setup prompts appear before anything starts — scroll limit, date filter, export limit
+- Every 20 dialogs: automatically checks and closes any lingering modals
+- Before each dialog: waits for previous modal to fully close before opening next
+- On slow connections, increase `WAIT_MS` from `100` to `200`–`300`
 - Output filename: `gemini_history_DD_MM_YYYY.txt`
 
 ---
