@@ -252,15 +252,17 @@ Exports chat history from your Google Activity page.
     return new Date(parseInt(raw.slice(0, 4)), parseInt(raw.slice(4, 6)) - 1, parseInt(raw.slice(6, 8)));
   }
 
-  function closeAllModals() {
-    const modals = document.querySelectorAll('.Wi5i2');
-    let closed = 0;
-    for (const m of modals) {
+  async function closeAllModals() {
+    const before = document.querySelectorAll('.Wi5i2').length;
+    if (!before) return 0;
+    for (const m of document.querySelectorAll('.Wi5i2')) {
       const btn = Array.from(m.querySelectorAll('button i'))
         .find(i => i.textContent.trim() === 'close')?.closest('button');
-      if (btn) { btn.click(); closed++; }
+      if (btn) btn.click();
     }
-    return closed;
+    await new Promise(r => setTimeout(r, WAIT_MS * 3));
+    const after = document.querySelectorAll('.Wi5i2').length;
+    return before - after;
   }
 
   let allLinks = Array.from(document.querySelectorAll('a.WFTFcf'));
@@ -277,16 +279,15 @@ Exports chat history from your Google Activity page.
 
   const links = EXPORT_LIMIT ? allLinks.slice(0, EXPORT_LIMIT) : allLinks;
   const totalLinks = links.length;
-  const secPerItem = 1.0;
-  const estSec = Math.round(totalLinks * secPerItem);
-  const estMin = Math.floor(estSec / 60);
-  const estRemSec = estSec % 60;
   console.log(`   Found ${allLinks.length} dialogs, exporting ${totalLinks}`);
-  console.log(`   ⏱ Estimated time: ~${estMin > 0 ? estMin + " min " : ""}${estRemSec} sec`);
+  console.log(`   ⏱ Starting... time estimate will update as we go`);
 
   const now = new Date();
   let results = [];
   let lastDate = null;
+  let firstDialogDate = null;
+  let lastDialogDate = null;
+  const exportStart = Date.now();
 
   results.push(`EXPORT: Google Gemini Activity`);
   results.push(`URL: ${location.href}`);
@@ -299,6 +300,9 @@ Exports chat history from your Google Activity page.
     const card = link.closest('[jsname="MFYZYe"]');
     const cwiz = link.closest('[data-date]');
     const dateLabel = parseDate(cwiz?.getAttribute('data-date'));
+    const dateObj = parseDateObj(cwiz?.getAttribute('data-date'));
+    if (i === 0 && dateObj) firstDialogDate = dateObj;
+    if (dateObj) lastDialogDate = dateObj;
 
     if (dateLabel && dateLabel !== lastDate) {
       results.push(`\n========== ${dateLabel.toUpperCase()} ==========\n`);
@@ -309,29 +313,31 @@ Exports chat history from your Google Activity page.
       .replace(/^Отправлен запрос\s*/i, '').replace(/^Sent to\s*/i, '').trim() || '?';
     let timeText = card?.querySelector('.H3Q9vf')?.innerText.split('•')[0].trim() || '';
 
+    // Dynamic ETA based on actual elapsed time
+    const elapsed = (Date.now() - exportStart) / 1000;
+    const avgSec = i > 0 ? elapsed / i : 1.0;
     const remaining = totalLinks - i - 1;
-    const remSec = Math.round(remaining * secPerItem);
+    const remSec = Math.round(remaining * avgSec);
     const remMin = Math.floor(remSec / 60);
     const remSecDisplay = remSec % 60;
     console.log(`   [${i + 1}/${totalLinks}] ${queryText.slice(0, 50)} — ~${remMin > 0 ? remMin + "m " : ""}${remSecDisplay}s left`);
 
-    // ── Checkpoint every 20: force-close any lingering modals ─
+    // ── Checkpoint every 20: force-close lingering modals ─────
     if (i > 0 && i % 20 === 0) {
       const closed = closeAllModals();
-      await new Promise(r => setTimeout(r, WAIT_MS * 5));
-      console.log(`   🔍 Checkpoint [${i}/${totalLinks}] — modals cleaned up (${closed} closed)`);
+      await new Promise(r => setTimeout(r, WAIT_MS * 3));
+      console.log(`   🔍 Checkpoint [${i}/${totalLinks}] — ${closed > 0 ? `⚠️ ${closed} stale modal(s) closed` : "✅ all clear"}`);
     }
 
-    // ── Before clicking: make sure no modal is already open ───
-    const stale = document.querySelector('.Wi5i2');
-    if (stale) {
+    // Before clicking: close stale modal if present
+    if (document.querySelector('.Wi5i2')) {
       closeAllModals();
-      await new Promise(r => setTimeout(r, WAIT_MS * 4));
+      await new Promise(r => setTimeout(r, WAIT_MS * 2));
     }
 
     link.click();
 
-    // Wait for new modal to appear
+    // Wait for modal to appear
     let modal = null;
     for (let t = 0; t < 30; t++) {
       await new Promise(r => setTimeout(r, WAIT_MS));
@@ -349,17 +355,23 @@ Exports chat history from your Google Activity page.
       const closeBtn = Array.from(modal.querySelectorAll('button i'))
         .find(i => i.textContent.trim() === 'close')?.closest('button');
       if (closeBtn) closeBtn.click();
-      await new Promise(r => setTimeout(r, WAIT_MS * 3));
+      // No fixed wait after close — next iteration handles stale check
     }
 
     if (!timeText) timeText = '??:??';
     results.push(`[${timeText}] USER: ${queryText}\nANSWER:\n${answerText}\n------------------------------------------`);
   }
 
-  const day   = String(now.getDate()).padStart(2, '0');
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const year  = now.getFullYear();
-  const filename = `gemini_history_${day}_${month}_${year}.txt`;
+  // Build filename with date range
+  const pad = n => String(n).padStart(2, '0');
+  const todayStr = `${pad(now.getDate())}_${pad(now.getMonth()+1)}_${now.getFullYear()}`;
+  let dateRangeStr = '';
+  if (firstDialogDate && lastDialogDate) {
+    const f = `${pad(firstDialogDate.getDate())}_${pad(firstDialogDate.getMonth()+1)}_${firstDialogDate.getFullYear()}`;
+    const l = `${pad(lastDialogDate.getDate())}_${pad(lastDialogDate.getMonth()+1)}_${lastDialogDate.getFullYear()}`;
+    dateRangeStr = f === l ? `_from_${f}` : `_from_${l}_to_${f}`;
+  }
+  const filename = `gemini_history_${todayStr}${dateRangeStr}.txt`;
 
   const output = results.join('\n');
   const blob = new Blob([output], { type: 'text/plain' });
