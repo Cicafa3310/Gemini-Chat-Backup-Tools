@@ -477,7 +477,7 @@ def split_file(input_path: str):
         header += f"[Source: {os.path.basename(input_path)}]\n"
         header += "=" * 60 + "\n\n"
 
-        out_name = f"part{idx:02d}_of{total_parts:02d}.txt"
+        out_name = f"{base_name}_part{idx:02d}_of{total_parts:02d}.txt"
         out_path = os.path.join(output_dir, out_name)
 
         with open(out_path, "w", encoding="utf-8") as f:
